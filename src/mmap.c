@@ -43,7 +43,7 @@ mmap_t *ag_mmap(int fd, off_t f_len) {
 #endif
 #endif
 
-    mmap_t *m = ag_malloc(sizeof(m));
+    mmap_t *m = ag_malloc(sizeof(*m));
     m->f_len = f_len;
     m->buf = buf;
     return m;
