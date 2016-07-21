@@ -4,10 +4,25 @@
 #include <sys/mman.h>
 #endif
 #include <errno.h>
+#include <unistd.h>
+#include <pthread.h>
 
 #include "mmap.h"
 #include "log.h"
 #include "util.h"
+
+static size_t pagesize;
+static pthread_mutex_t mmap_mtx;
+static mmap_t *head = NULL;
+static mmap_t *tail = NULL;
+static mmap_t *first_active = NULL;
+
+void init_mmap(void) {
+    pagesize = (size_t)getpagesize();
+    if (pthread_mutex_init(&mmap_mtx, NULL)) {
+        die("Could not initialize mmap_mtx!");
+    }
+}
 
 mmap_t *ag_mmap(int fd, off_t f_len) {
     void *buf;
@@ -46,14 +61,47 @@ mmap_t *ag_mmap(int fd, off_t f_len) {
     mmap_t *m = ag_malloc(sizeof(*m));
     m->f_len = f_len;
     m->buf = buf;
+    m->active = TRUE;
+    m->next = NULL;
+
+    pthread_mutex_lock(&mmap_mtx);
+    if (head) {
+        tail->next = m;
+        tail = m;
+    } else {
+        head = tail = first_active = m;
+    }
+    pthread_mutex_unlock(&mmap_mtx);
+
     return m;
 }
 
 void ag_munmap(mmap_t *m) {
+    pthread_mutex_lock(&mmap_mtx);
+
+    m->active = FALSE;
+    while (first_active && !first_active->active) {
+        first_active = first_active->next;
+    }
+
+    mmap_t *batch = head;
+    while (head != first_active) {
+        mmap_t *new_head = head->next;
+        head->next = NULL;
+        head = new_head;
+    }
+    if (head == NULL) {
+        tail = first_active = NULL;
+    }
+
+    pthread_mutex_unlock(&mmap_mtx);
+
+    for( ; batch ; batch = batch->next) {
 #ifdef _WIN32
-    UnmapViewOfFile(m->buf);
+        UnmapViewOfFile(batch->buf);
 #else
-    munmap(m->buf, m->f_len);
+        munmap(batch->buf, batch->f_len);
 #endif
-    free(m);
+        free(batch);
+    }
 }

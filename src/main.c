@@ -19,6 +19,7 @@
 #include "options.h"
 #include "search.h"
 #include "util.h"
+#include "mmap.h"
 
 typedef struct {
     pthread_t thread;
@@ -54,6 +55,8 @@ int main(int argc, char **argv) {
         memset(&stats, 0, sizeof(stats));
         gettimeofday(&(stats.time_start), NULL);
     }
+
+    init_mmap();
 
 #ifdef USE_PCRE_JIT
     int has_jit = 0;
