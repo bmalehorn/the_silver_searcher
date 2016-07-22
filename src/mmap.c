@@ -6,12 +6,15 @@
 #include <errno.h>
 #include <unistd.h>
 #include <pthread.h>
+#include <stdlib.h>
 
 #include "mmap.h"
 #include "log.h"
 #include "util.h"
 
 static off_t pagesize;
+static int buffer_size;
+
 static pthread_mutex_t mmap_mtx;
 static mmap_t *head = NULL;
 static mmap_t *tail = NULL;
@@ -23,6 +26,10 @@ void init_mmap(void) {
     pagesize = (off_t)sysconf(_SC_PAGESIZE);
     if (pthread_mutex_init(&mmap_mtx, NULL)) {
         die("Could not initialize mmap_mtx!");
+    }
+    char *buffer_size_str = getenv("BUFFER_SIZE");
+    if (!buffer_size_str || !(buffer_size = atoi(buffer_size_str))) {
+        buffer_size = 20;
     }
 }
 
@@ -76,7 +83,7 @@ mmap_t *ag_mmap(int fd, off_t f_len) {
 
     pthread_mutex_lock(&mmap_mtx);
 
-    void *addr = next_addr;
+    m->target = next_addr;
     next_addr += round_up_to_pagesize(f_len);
 
     m->f_len = f_len;
@@ -92,8 +99,7 @@ mmap_t *ag_mmap(int fd, off_t f_len) {
 
     pthread_mutex_unlock(&mmap_mtx);
 
-    m->buf = try_mmap_addr(addr, fd, f_len);
-    m->contiguous = m->buf == addr;
+    m->buf = try_mmap_addr(m->target, fd, f_len);
     if (m->buf == MAP_FAILED) {
         log_err("File failed to load: %s.", strerror(errno));
         goto fail;
@@ -119,14 +125,12 @@ void ag_munmap(mmap_t *m) {
     char *batch_start = NULL;
     char *batch_end = NULL;
 
-    if (inactive_count > 20) {
+    if (inactive_count >= buffer_size) {
+        batch_start = head->target;
         while (head != first_active) {
+            batch_end = head->target + round_up_to_pagesize(head->f_len);
             mmap_t *new_head = head->next;
-            if (head->contiguous) {
-                if (batch_start == NULL) {
-                    batch_start = head->buf;
-                }
-                batch_end = head->buf + round_up_to_pagesize(head->f_len);
+            if (head->buf == head->target) {
                 free(head);
             } else {
                 head->next = non_contiguous;
