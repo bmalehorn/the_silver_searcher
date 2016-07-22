@@ -7,6 +7,8 @@
 #include <unistd.h>
 #include <pthread.h>
 #include <stdlib.h>
+#include <stdint.h>
+
 
 #include "mmap.h"
 #include "log.h"
@@ -19,7 +21,7 @@ static pthread_mutex_t mmap_mtx;
 static mmap_t *head = NULL;
 static mmap_t *tail = NULL;
 static mmap_t *first_active = NULL;
-static char *next_addr = (char*)0x500000000000;
+static char *next_addr;
 static int inactive_count = 0;
 
 void init_mmap(void) {
@@ -31,6 +33,11 @@ void init_mmap(void) {
     if (!buffer_size_str || !(buffer_size = atoi(buffer_size_str))) {
         buffer_size = 20;
     }
+#if INTPTR_MAX == INT32_MAX
+    next_addr = (char*)0x50000000;
+#else
+    next_addr = (char*)0x500000000000;
+#endif
 }
 
 static off_t round_up_to_pagesize(off_t n) {
@@ -62,9 +69,9 @@ static void *try_mmap_addr(void *target, int fd, off_t f_len) {
     /* if (count++ % 2 == 0) { */
     /*     buf = mmap(NULL, f_len, PROT_READ, MAP_SHARED, fd, 0); */
     /* } else { */
-    buf = mmap(target, f_len, PROT_READ, MAP_SHARED, fd, 0);
+        buf = mmap(target, f_len, PROT_READ, MAP_SHARED, fd, 0);
     /* } */
-    /* printf("mmap(%p, %d) => %p\n", target, (int)f_len, buf); */
+    log_debug("mmap(%p, %zd) => %p", target, (size_t)f_len, buf);
     if (buf == MAP_FAILED) {
         log_err("File failed to load: %s.", strerror(errno));
         return NULL;
@@ -93,6 +100,9 @@ mmap_t *ag_mmap(int fd, off_t f_len) {
     if (head) {
         tail->next = m;
         tail = m;
+        if (!first_active) {
+            first_active = tail;
+        }
     } else {
         head = tail = first_active = m;
     }
@@ -116,7 +126,7 @@ void ag_munmap(mmap_t *m) {
     pthread_mutex_lock(&mmap_mtx);
 
     m->active = FALSE;
-    while (first_active != tail && !first_active->active) {
+    while (first_active != NULL && !first_active->active) {
         first_active = first_active->next;
         inactive_count++;
     }
@@ -124,6 +134,7 @@ void ag_munmap(mmap_t *m) {
     mmap_t *non_contiguous = NULL;
     char *batch_start = NULL;
     char *batch_end = NULL;
+    int have_batch = FALSE;
 
     if (inactive_count >= buffer_size) {
         batch_start = head->target;
@@ -131,6 +142,7 @@ void ag_munmap(mmap_t *m) {
             batch_end = head->target + round_up_to_pagesize(head->f_len);
             mmap_t *new_head = head->next;
             if (head->buf == head->target) {
+                have_batch = TRUE;
                 free(head);
             } else {
                 head->next = non_contiguous;
@@ -146,23 +158,24 @@ void ag_munmap(mmap_t *m) {
 
     pthread_mutex_unlock(&mmap_mtx);
 
-    if (batch_start) {
-        /* printf("batch_start = %p, batch_len = %d\n", batch_start, (int)batch_len); */
-        // XXX TODO: work on windows. No batching on windows
+    if (have_batch) {
+#ifdef _WIN32
+        log_err("Cannot block munmap(%p, %zd) on windows.",
+                batch_start, (size_t)(batch_end - batch_start));
+#else
         int ret = munmap(batch_start, batch_end - batch_start);
-        (void)ret;
-        /* printf("BLOCK munmap(%p, %d) => %d\n", batch_start, */
-        /*        (int)(batch_end - batch_start), ret); */
+        log_debug("block munmap(%p, %zd) => %d", batch_start,
+                  (size_t)(batch_end - batch_start), ret);
+#endif
     }
 
     while (non_contiguous) {
 #ifdef _WIN32
-#error "not supported"
+        UnmapViewOfFile(buf);
 #else
         int ret = munmap(non_contiguous->buf, non_contiguous->f_len);
-        (void)ret;
-        /* printf("SOLO  munmap(%p, %d) => %d\n", non_contiguous->buf, */
-        /*        (int)non_contiguous->f_len, ret); */
+        log_debug("solo  munmap(%p, %zd) => %d", non_contiguous->buf,
+                  (size_t)non_contiguous->f_len, ret);
 #endif
         mmap_t *next = non_contiguous->next;
         free(non_contiguous);
