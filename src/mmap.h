@@ -2,10 +2,11 @@
 #define MMAP_H
 
 typedef struct mmap_t {
-    void *buf;
+    char *buf;
     off_t f_len;
     struct mmap_t *next;
     int active;
+    int contiguous;
 } mmap_t;
 
 void init_mmap(void);
