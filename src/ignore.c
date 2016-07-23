@@ -125,6 +125,10 @@ void add_ignore_pattern(ignores *ig, const char *pattern) {
             patterns_len = &(ig->slash_regexes_len);
             pattern++;
             pattern_len--;
+        } else if (strchr(pattern, '/') &&
+                   strchr(pattern, '/') != &pattern[pattern_len - 1]) {
+            patterns_p = &(ig->slash_regexes);
+            patterns_len = &(ig->slash_regexes_len);
         } else {
             patterns_p = &(ig->regexes);
             patterns_len = &(ig->regexes_len);
@@ -135,6 +139,10 @@ void add_ignore_pattern(ignores *ig, const char *pattern) {
             patterns_len = &(ig->slash_names_len);
             pattern++;
             pattern_len--;
+        } else if (strchr(pattern, '/') &&
+                   strchr(pattern, '/') != &pattern[pattern_len - 1]) {
+            patterns_p = &(ig->slash_names);
+            patterns_len = &(ig->slash_names_len);
         } else {
             patterns_p = &(ig->names);
             patterns_len = &(ig->names_len);
