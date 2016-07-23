@@ -8,14 +8,15 @@
 #include <pthread.h>
 #include <stdlib.h>
 #include <stdint.h>
-
+#include <limits.h>
 
 #include "mmap.h"
 #include "log.h"
 #include "util.h"
 
 static off_t pagesize;
-static int buffer_size;
+static int buffer_size = 0;
+static size_t mem_size = 0; // in bytes
 
 static pthread_mutex_t mmap_mtx;
 static mmap_t *head = NULL;
@@ -23,16 +24,22 @@ static mmap_t *tail = NULL;
 static mmap_t *first_active = NULL;
 static char *next_addr;
 static int inactive_count = 0;
+static size_t mem_count = 0;
 
 void init_mmap(void) {
     pagesize = (off_t)sysconf(_SC_PAGESIZE);
     if (pthread_mutex_init(&mmap_mtx, NULL)) {
         die("Could not initialize mmap_mtx!");
     }
+    char *mem_size_str = getenv("MEM_SIZE");
+    if (!mem_size_str || !(mem_size = atoi(mem_size_str))) {
+        mem_size = LONG_MAX;
+    }
     char *buffer_size_str = getenv("BUFFER_SIZE");
     if (!buffer_size_str || !(buffer_size = atoi(buffer_size_str))) {
         buffer_size = 20;
     }
+
 #if INTPTR_MAX == INT32_MAX
     next_addr = (char*)0x50000000;
 #else
@@ -127,8 +134,9 @@ void ag_munmap(mmap_t *m) {
 
     m->active = FALSE;
     while (first_active != NULL && !first_active->active) {
-        first_active = first_active->next;
         inactive_count++;
+        mem_count += round_up_to_pagesize(first_active->f_len);
+        first_active = first_active->next;
     }
 
     mmap_t *non_contiguous = NULL;
@@ -136,10 +144,12 @@ void ag_munmap(mmap_t *m) {
     char *batch_end = NULL;
     int have_batch = FALSE;
 
-    if (inactive_count >= buffer_size) {
+    if (inactive_count >= buffer_size || mem_count >= mem_size) {
         batch_start = head->target;
         while (head != first_active) {
             batch_end = head->target + round_up_to_pagesize(head->f_len);
+            inactive_count--;
+            mem_count -= round_up_to_pagesize(head->f_len);
             mmap_t *new_head = head->next;
             if (head->buf == head->target) {
                 have_batch = TRUE;
@@ -149,12 +159,12 @@ void ag_munmap(mmap_t *m) {
                 non_contiguous = head;
             }
             head = new_head;
-            inactive_count--;
         }
         if (head == NULL) {
             tail = first_active = NULL;
         }
     }
+    log_debug("mmap: mem_count = %d\n", mem_count);
 
     pthread_mutex_unlock(&mmap_mtx);
 
