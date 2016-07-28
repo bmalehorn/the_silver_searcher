@@ -33,7 +33,10 @@ void init_mmap(void) {
     if (pthread_mutex_init(&mmap_mtx, NULL)) {
         die("Could not initialize mmap_mtx!");
     }
-    blocks_capacity = 20;
+    char *cap = getenv("CAPACITY");
+    if (!cap || !(blocks_capacity = atoi(cap))) {
+        blocks_capacity = 10;
+    }
     blocks_n = 0;
     blocks = ag_malloc(sizeof(*blocks) * blocks_capacity);
 }
@@ -49,14 +52,11 @@ static int block_cmp(const void *a, const void *b) {
 }
 
 static void do_munmap(void *buf, off_t f_len) {
-    int ret = 1337;
-    (void)ret;
 #ifdef _WIN32
     UnmapViewOfFile(buf);
 #else
-    ret = munmap(buf, f_len);
+    munmap(buf, f_len);
 #endif
-    /* log_debug("munmap(%p, %zd) => %d", buf, f_len, ret); */
 }
 
 void ag_munmap(void *addr, off_t f_len) {
@@ -81,16 +81,12 @@ void ag_munmap(void *addr, off_t f_len) {
     if (old_blocks) {
         char *base = NULL;
         off_t total_len = 0;
+
         qsort(old_blocks, blocks_capacity, sizeof(*old_blocks), block_cmp);
 
-
-        static int munmaps;
-        static int seen;
         for (i = 0; i < blocks_capacity; i++) {
             void *buf = old_blocks[i].buf;
             off_t len = round_up_to_pagesize(old_blocks[i].len);
-            seen++;
-            /* printf("@@@ %p + %6zd, %p + %6zd\n", base, total_len, buf, len); */
             if (base == NULL) {
                 base = buf;
                 total_len = len;
@@ -98,17 +94,13 @@ void ag_munmap(void *addr, off_t f_len) {
                 total_len += len;
             } else {
                 do_munmap(base, total_len);
-                munmaps++;
                 base = buf;
                 total_len = len;
             }
         }
+
         do_munmap(base, total_len);
-        munmaps++;
+
         free(old_blocks);
-        static int hits;
-        if (hits++ % 64 == 0) {
-            /* log_debug("@@@ %d / %d", munmaps, seen); */
-        }
     }
 }
