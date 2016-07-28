@@ -1,6 +1,6 @@
 #include "search.h"
-#include "scandir.h"
 #include "mmap.h"
+#include "scandir.h"
 
 void search_buf(const char *buf, const size_t buf_len,
                 const char *dir_full_path) {
@@ -220,10 +220,10 @@ void search_stream(FILE *stream, const char *path) {
 void search_file(const char *file_full_path) {
     int fd;
     off_t f_len = 0;
+    char *buf = NULL;
     struct stat statbuf;
     int rv = 0;
     FILE *fp = NULL;
-    mmap_t *m = NULL;
 
     fd = open(file_full_path, O_RDONLY);
     if (fd < 0) {
@@ -268,17 +268,42 @@ void search_file(const char *file_full_path) {
         goto cleanup;
     }
 
-    m = ag_mmap(fd, f_len);
-    if (m == NULL) {
-        log_err("File %s failed to load.", file_full_path);
+#ifdef _WIN32
+    {
+        HANDLE hmmap = CreateFileMapping(
+            (HANDLE)_get_osfhandle(fd), 0, PAGE_READONLY, 0, f_len, NULL);
+        buf = (char *)MapViewOfFile(hmmap, FILE_SHARE_READ, 0, 0, f_len);
+        if (hmmap != NULL)
+            CloseHandle(hmmap);
+    }
+    if (buf == NULL) {
+        FormatMessageA(
+            FORMAT_MESSAGE_ALLOCATE_BUFFER |
+                FORMAT_MESSAGE_FROM_SYSTEM |
+                FORMAT_MESSAGE_IGNORE_INSERTS,
+            NULL, GetLastError(), 0, (void *)&buf, 0, NULL);
+        log_err("File %s failed to load: %s.", file_full_path, buf);
+        LocalFree((void *)buf);
         goto cleanup;
     }
+#else
+    buf = mmap(0, f_len, PROT_READ, MAP_SHARED, fd, 0);
+    if (buf == MAP_FAILED) {
+        log_err("File %s failed to load: %s.", file_full_path, strerror(errno));
+        goto cleanup;
+    }
+#if HAVE_MADVISE
+    madvise(buf, f_len, MADV_SEQUENTIAL);
+#elif HAVE_POSIX_FADVISE
+    posix_fadvise(fd, 0, f_len, POSIX_MADV_SEQUENTIAL);
+#endif
+#endif
 
     if (opts.search_zip_files) {
-        ag_compression_type zip_type = is_zipped(m->buf, f_len);
+        ag_compression_type zip_type = is_zipped(buf, f_len);
         if (zip_type != AG_NO_COMPRESSION) {
             int _buf_len = (int)f_len;
-            char *_buf = decompress(zip_type, m->buf, f_len, file_full_path, &_buf_len);
+            char *_buf = decompress(zip_type, buf, f_len, file_full_path, &_buf_len);
             if (_buf == NULL || _buf_len == 0) {
                 log_err("Cannot decompress zipped file %s", file_full_path);
                 goto cleanup;
@@ -289,14 +314,18 @@ void search_file(const char *file_full_path) {
         }
     }
 
-    search_buf(m->buf, f_len, file_full_path);
+    search_buf(buf, f_len, file_full_path);
 
 cleanup:
 
-    if (m) {
-        ag_munmap(m);
+    if (buf != NULL) {
+        ag_munmap(buf, f_len);
+        /* #ifdef _WIN32 */
+        /*         UnmapViewOfFile(buf); */
+        /* #else */
+        /*         munmap(buf, f_len); */
+        /* #endif */
     }
-
     if (fd != -1) {
         close(fd);
     }

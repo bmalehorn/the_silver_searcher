@@ -16,10 +16,10 @@
 #endif
 
 #include "log.h"
+#include "mmap.h"
 #include "options.h"
 #include "search.h"
 #include "util.h"
-#include "mmap.h"
 
 typedef struct {
     pthread_t thread;
