@@ -46,9 +46,9 @@ static off_t round_up_to_pagesize(off_t n) {
 }
 
 static int block_cmp(const void *a, const void *b) {
-    mmap_block_t *const *c = a;
-    mmap_block_t *const *d = b;
-    return (*c)->buf < (*d)->buf ? -1 : 1;
+    const mmap_block_t *c = a;
+    const mmap_block_t *d = b;
+    return c->buf < d->buf ? -1 : 1;
 }
 
 static void do_munmap(void *buf, off_t f_len) {
