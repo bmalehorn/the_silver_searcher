@@ -102,8 +102,12 @@ void ag_munmap(void *addr, off_t f_len) {
             if (base == NULL) {
                 base = buf;
                 total_len = len;
+// Windows "munmap" can only remove an address allocated by Windows "mmap".
+// So, only form a blob to munmap() in 1 pass, if you are *NOT* Windows.
+#ifndef _WIN32
             } else if (base + total_len == buf) {
                 total_len += len;
+#endif
             } else {
                 do_munmap(base, total_len);
                 base = buf;
